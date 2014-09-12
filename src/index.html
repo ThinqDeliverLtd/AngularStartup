@@ -2,16 +2,166 @@
 <html lang="en" ng-app="SEOApp">
 <head>
 <!-- <script src="//code.jquery.com/jquery-1.11.0.min.js"></script> -->
-<script src="https://ajax.googleapis.com/ajax/libs/angularjs/1.3.0-rc.1/angular.min.js"></script> 
-<script src="https://ajax.googleapis.com/ajax/libs/angularjs/1.3.0-rc.1/angular-route.min.js"></script> 
+<script src="https://ajax.googleapis.com/ajax/libs/angularjs/1.3.0-rc.1/angular.js"></script> 
+<script src="https://ajax.googleapis.com/ajax/libs/angularjs/1.3.0-rc.1/angular-route.js"></script> 
+ <script src="https://cdnjs.cloudflare.com/ajax/libs/angular-ui-router/0.2.10/angular-ui-router.js"></script> 
+ <!-- <script src="https://cdnjs.cloudflare.com/ajax/libs/angular-ui-router/0.2.10/angular-ui-states.js"></script>  -->
 <!-- <script src="https://maxcdn.bootstrapcdn.com/bootstrap/3.2.0/js/bootstrap.min.js"></script> -->
  <script src="https://cdnjs.cloudflare.com/ajax/libs/angular-ui-bootstrap/0.10.0/ui-bootstrap-tpls.min.js"></script> 
  <script src="https://cdnjs.cloudflare.com/ajax/libs/angular-ui-bootstrap/0.10.0/ui-bootstrap.min.js"></script>  
 <script>
 	var myApp = angular.module('SEOApp', []);
 	
-	myApp.controller('SEOController', function ($scope) {
+	myApp.constant('AUTH_EVENTS', {
+  loginSuccess: 'auth-login-success',
+  loginFailed: 'auth-login-failed',
+  logoutSuccess: 'auth-logout-success',
+  sessionTimeout: 'auth-session-timeout',
+  notAuthenticated: 'auth-not-authenticated',
+  notAuthorized: 'auth-not-authorized'
+});
+
+myApp.constant('USER_ROLES', {
+  all: '*',
+  admin: 'admin',
+  editor: 'editor',
+  guest: 'guest'
+});
+
+	myApp.controller('SEOController', function ($scope,USER_ROLES,
+                                               AuthService) {
+	$scope.currentUser = null;
+  $scope.userRoles = USER_ROLES;
+  $scope.isAuthorized = AuthService.isAuthorized; 
+  $scope.setCurrentUser = function (user) {
+    $scope.currentUser = user;
+  };
 	});
+	
+	//https://medium.com/opinionated-angularjs/techniques-for-authentication-in-angularjs-applications-7bbf0346acec
+	
+	myApp.controller('LoginController', function ($scope, $rootScope, AUTH_EVENTS, AuthService) {
+		  $scope.credentials = {
+			username: '',
+			password: ''
+		  };
+		  $scope.login = function (credentials) {
+			AuthService.login(credentials).then(function (user) {
+			  $rootScope.$broadcast(AUTH_EVENTS.loginSuccess);
+			  $scope.setCurrentUser(user);
+			}, function () {
+			  $rootScope.$broadcast(AUTH_EVENTS.loginFailed);
+			});
+		};
+	});
+	
+	myApp.factory('AuthService', function ($http, Session) {
+  var authService = {};
+ 
+  authService.login = function (credentials) {
+    return $http
+      .post('/login', credentials)
+      .then(function (res) {
+        Session.create(res.data.id, res.data.user.id,
+                       res.data.user.role);
+        return res.data.user;
+      });
+  };
+ 
+  authService.isAuthenticated = function () {
+    return !!Session.userId;
+  };
+ 
+  authService.isAuthorized = function (authorizedRoles) {
+    if (!angular.isArray(authorizedRoles)) {
+      authorizedRoles = [authorizedRoles];
+    }
+    return (authService.isAuthenticated() &&
+      authorizedRoles.indexOf(Session.userRole) !== -1);
+  };
+ 
+  return authService;
+});
+
+myApp.service('Session', function () {
+  this.create = function (sessionId, userId, userRole) {
+    this.id = sessionId;
+    this.userId = userId;
+    this.userRole = userRole;
+  };
+  this.destroy = function () {
+    this.id = null;
+    this.userId = null;
+    this.userRole = null;
+  };
+  return this;
+});
+
+myApp.config(function ($stateProvider, USER_ROLES) {
+  $stateProvider.state('dashboard', {
+    url: '/dashboard',
+    templateUrl: 'dashboard/index.html',
+    data: {
+      authorizedRoles: [USER_ROLES.admin, USER_ROLES.editor]
+    }
+  });
+});
+
+myApp.run(function ($rootScope, AUTH_EVENTS, AuthService) {
+  $rootScope.$on('$stateChangeStart', function (event, next) {
+    var authorizedRoles = next.data.authorizedRoles;
+    if (!AuthService.isAuthorized(authorizedRoles)) {
+      event.preventDefault();
+      if (AuthService.isAuthenticated()) {
+        // user is not allowed
+        $rootScope.$broadcast(AUTH_EVENTS.notAuthorized);
+      } else {
+        // user is not logged in
+        $rootScope.$broadcast(AUTH_EVENTS.notAuthenticated);
+      }
+    }
+  });
+});
+
+myApp.factory('AuthInterceptor', function ($rootScope, $q,
+                                      AUTH_EVENTS) {
+  return {
+    responseError: function (response) { 
+      $rootScope.$broadcast({
+        401: AUTH_EVENTS.notAuthenticated,
+        403: AUTH_EVENTS.notAuthorized,
+        419: AUTH_EVENTS.sessionTimeout,
+        440: AUTH_EVENTS.sessionTimeout
+      }[response.status], response);
+      return $q.reject(response);
+    }
+  };
+});
+
+myApp.directive('loginDialog', function (AUTH_EVENTS) {
+  return {
+    restrict: 'A',
+ 
+    link: function (scope) {
+      var showDialog = function () {
+        scope.visible = true;
+      };
+  
+      scope.visible = false;
+      scope.$on(AUTH_EVENTS.notAuthenticated, showDialog);
+      scope.$on(AUTH_EVENTS.sessionTimeout, showDialog)
+    }
+  };
+});
+
+myApp.config(function ($httpProvider) {
+  $httpProvider.interceptors.push([
+    '$injector',
+    function ($injector) {
+      return $injector.get('AuthInterceptor');
+    }
+  ]);
+});
 
 </script>
 <!-- Latest compiled and minified CSS -->
@@ -74,42 +224,25 @@
     </div><!-- /.navbar-collapse -->
   </div><!-- /.container-fluid -->
 </nav>
-  <div>
-		In imperdiet magna in ante egestas eleifend. Interdum et malesuada fames ac ante ipsum primis in faucibus. Nullam imperdiet vel sapien id imperdiet. Praesent quis leo id metus aliquam finibus vitae nec neque. Nunc maximus dictum dolor, id volutpat mi. Morbi condimentum, lorem a maximus fermentum, libero dui gravida leo, et vulputate leo arcu eu turpis. Ut sit amet lacus nisi. Sed maximus diam purus, id vehicula purus tempor eget. Sed vestibulum lectus id nisi varius porta. Pellentesque commodo, tortor nec tristique auctor, eros augue dapibus velit, vel sollicitudin lectus nibh vel tortor. Vivamus quis egestas ligula, nec efficitur tortor. Quisque vehicula faucibus sem ac vestibulum.
+  <form name="loginForm" ng-controller="LoginController"
+      ng-submit="login(credentials)" novalidate>
+  <label for="username">Username:</label>
+  <input type="text" id="username"
+         ng-model="credentials.username">
+  <label for="password">Password:</label>
+  <input type="password" id="password"
+         ng-model="credentials.password">
+  <button type="submit">Login</button>
+</form>
 
-In elementum gravida tempor. In cursus massa sit amet dolor dapibus, non sagittis tortor consequat. Pellentesque mauris dui, imperdiet sed tempor eu, imperdiet sit amet sapien. Quisque ac nibh viverra, posuere ipsum non, tempor urna. Mauris pharetra nulla sit amet dictum fringilla. Proin vitae tincidunt enim. Vestibulum sit amet lectus magna. Sed ornare libero sit amet quam tristique egestas. Duis eu ullamcorper eros, et sodales dolor. Aliquam eget lacinia dui. Proin gravida orci quam, nec aliquam nisl vulputate elementum. Phasellus eget fringilla orci.
+<div ng-if="currentUser">Welcome, {{ currentUser.name }}</div>
+<div ng-if="isAuthorized(userRoles.admin)">You're admin.</div>
+<div ng-switch on="currentUser.role">
+  <div ng-switch-when="userRoles.admin">You're admin.</div>
+  <div ng-switch-when="userRoles.editor">You're editor.</div>
+  <div ng-switch-default>You're something else.</div>
+</div>
 
-Pellentesque sit amet sem rutrum, venenatis leo tempus, rhoncus dolor. Sed mattis feugiat feugiat. Nunc volutpat tempus erat quis consequat. Praesent scelerisque est id felis semper, et mollis arcu tempus. Suspendisse sagittis pretium neque hendrerit pulvinar. Fusce pellentesque dapibus dui, at vulputate ligula venenatis sed. Praesent fermentum erat at nisl suscipit bibendum. Pellentesque vitae tincidunt libero, tempor ultricies purus.
-
-Pellentesque vehicula blandit elit, at consequat metus imperdiet pharetra. Vestibulum lobortis condimentum condimentum. Integer placerat enim vitae facilisis consectetur. Nulla ut consequat dui. In hac habitasse platea dictumst. Nulla in metus id tellus elementum suscipit. Proin nec posuere metus. Cum sociis natoque penatibus et magnis dis parturient montes, nascetur ridiculus mus. In malesuada tempus ipsum vitae pulvinar. Etiam eleifend quam ut gravida luctus. Mauris malesuada sapien non tellus faucibus condimentum. Ut consectetur maximus ex, quis dignissim lacus posuere in. Donec sapien est, aliquet in pulvinar ac, placerat eu lectus.
-
-Aenean porta gravida dui, eu dapibus urna dignissim a. Duis quis commodo felis, ut vestibulum enim. Morbi et elementum est, sed eleifend erat. Praesent gravida ultrices convallis. Integer porttitor efficitur ligula sit amet placerat. Donec erat enim, laoreet placerat nulla eu, egestas molestie nunc. Praesent nisi tellus, consequat non auctor eget, bibendum sit amet nisl. Quisque felis quam, faucibus et consequat quis, laoreet consectetur augue. Nunc tincidunt augue eu eros viverra, vel lobortis nunc tempus. Aenean dapibus nunc ut pharetra rhoncus. Nam arcu quam, dictum pellentesque nibh eget, varius sollicitudin arcu. Quisque vel suscipit ex. Donec est lorem, porta a scelerisque non, pulvinar a nibh. Aliquam nec eros eu turpis tristique interdum. Cum sociis natoque penatibus et magnis dis parturient montes, nascetur ridiculus mus. Nunc sollicitudin in dolor eget venenatis.
-
-Curabitur et rutrum augue. Fusce felis nulla, pellentesque quis maximus ac, egestas eget nunc. Nulla luctus congue augue, non facilisis tortor dictum dictum. Mauris iaculis molestie venenatis. Donec consectetur metus sed purus tempor, ut suscipit ante viverra. Proin nec convallis mi. Curabitur consectetur est neque, non lacinia massa posuere in. Vestibulum elementum augue eget mattis dignissim. Donec facilisis lorem in mollis condimentum.
-
-Pellentesque cursus ante non lorem pharetra, in faucibus nibh vestibulum. Aenean viverra nec dolor ut porttitor. Etiam rutrum scelerisque lacinia. Etiam eleifend aliquet rhoncus. Pellentesque id lorem eget lacus gravida cursus. Mauris rhoncus consectetur tortor, nec tempus nunc vehicula ut. Donec tempus orci nibh, nec auctor odio porttitor sit amet.
-
-Vivamus vestibulum risus eu lacus maximus malesuada. Curabitur dignissim arcu at tortor faucibus imperdiet. Curabitur ut leo nisl. Donec egestas luctus luctus. Nulla ultrices sem in hendrerit fermentum. Ut at mi purus. Vestibulum in massa in erat vehicula semper. Quisque tristique sapien sed sem convallis, eu tincidunt dui convallis. Duis auctor est urna, blandit luctus nisi porttitor ac. Curabitur sit amet ornare eros. Donec sit amet erat tortor. Curabitur at malesuada dolor, ut malesuada ipsum. Pellentesque quis ex vel leo hendrerit viverra non non libero.
-
-Morbi interdum libero ac velit euismod, ac mattis lectus condimentum. Suspendisse sit amet dignissim orci. Maecenas eu nibh consectetur, fermentum justo ut, posuere risus. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Morbi accumsan turpis convallis finibus rhoncus. Aenean id nunc erat. Suspendisse sed ultrices tellus, venenatis vehicula sapien. Etiam ante tortor, convallis sed lorem sit amet, placerat rhoncus libero. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Nam leo purus, dignissim at sem vitae, pulvinar tristique leo. Praesent ligula ex, bibendum in pellentesque quis, scelerisque sed orci. In hac habitasse platea dictumst. Proin congue mollis dolor ac bibendum. Praesent interdum feugiat maximus. Integer scelerisque, dui sed egestas tincidunt, libero dolor fringilla diam, eget lacinia sapien nibh eu nisl.
-
-Phasellus luctus quam vel elit viverra ornare. Interdum et malesuada fames ac ante ipsum primis in faucibus. Donec ac vulputate purus. Phasellus porttitor nunc nec arcu dignissim, a pulvinar tortor placerat. Nulla porta est dolor, ut volutpat lorem maximus tempus. Donec congue faucibus erat nec viverra. Nulla turpis metus, sodales at urna non, eleifend accumsan ligula. Vestibulum lacinia efficitur suscipit. Quisque bibendum placerat bibendum. Integer a sem elementum urna accumsan faucibus id quis purus.
-
-Maecenas vitae mattis magna. Mauris condimentum elit vulputate rutrum euismod. Donec vel ultricies dolor. Pellentesque enim dui, facilisis et efficitur id, elementum a eros. Nam volutpat euismod condimentum. Mauris vel ultrices purus. Aenean id rhoncus ligula. In at nibh mauris. Duis at bibendum leo, quis fringilla mi.
-
-Maecenas non mauris iaculis, porta elit nec, iaculis lacus. Phasellus placerat hendrerit porttitor. Phasellus aliquam sollicitudin lectus sit amet facilisis. Vestibulum gravida tempus dolor id vehicula. Morbi iaculis sodales lectus quis vehicula. Morbi orci mauris, pulvinar a orci quis, mollis finibus dolor. Mauris eleifend condimentum justo, dictum posuere ipsum venenatis sit amet. Donec posuere metus in lorem elementum lobortis. Donec mattis turpis eget dignissim mattis. Sed a volutpat enim. Cras augue risus, dictum in rhoncus quis, mollis nec lectus. Sed ex lectus, tincidunt id mauris at, luctus euismod nunc. Suspendisse potenti.
-
-In hac habitasse platea dictumst. Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; In hac habitasse platea dictumst. Nulla sit amet fermentum orci. Vestibulum ultricies a lorem ut interdum. Integer congue rhoncus consequat. Nullam arcu nisl, euismod a orci sed, feugiat dictum lectus. Donec laoreet vulputate lorem, eget euismod lacus suscipit non. In dignissim libero sapien, eu commodo nunc facilisis et. Proin fringilla est id erat finibus porta. Cum sociis natoque penatibus et magnis dis parturient montes, nascetur ridiculus mus. Sed scelerisque hendrerit lectus quis ullamcorper. Pellentesque varius risus vitae porta sagittis. Fusce tincidunt purus ante, pellentesque congue metus condimentum ac. Nullam pretium dui vel urna hendrerit, eget tempor nulla vehicula. Nam sed convallis ante.
-
-In vel ipsum varius, pretium mauris eget, vestibulum erat. Mauris id ullamcorper massa. Nam porttitor, urna nec fringilla maximus, erat neque eleifend nisl, ut rutrum libero libero eget libero. Duis lacinia libero quis tortor euismod porttitor. Quisque aliquet facilisis euismod. Pellentesque in placerat nunc, id commodo arcu. Maecenas congue nunc eu sapien sodales, ac semper tellus pellentesque. Praesent varius porttitor malesuada. Curabitur diam lorem, elementum at turpis consectetur, efficitur maximus est. Duis maximus feugiat erat nec eleifend. Ut fermentum enim nec orci ultrices tristique. Quisque semper lectus in tristique dignissim. In ac odio in sapien interdum tincidunt a at leo.
-
-Aenean mollis metus in commodo vestibulum. Nunc in auctor orci. Donec quis dictum mi, vitae pulvinar lacus. Suspendisse arcu tellus, eleifend non elementum bibendum, fermentum at sem. In luctus tellus in orci dictum, vitae rutrum velit sollicitudin. Nam sit amet ullamcorper nibh, id dictum ex. Morbi placerat mauris sem, vel convallis justo ullamcorper id. Cras sed lobortis eros, ac vehicula purus. Etiam non ligula fringilla, commodo dui et, malesuada ante. Aenean vitae urna ac ex interdum auctor vel eget leo. In accumsan eu mi ut pellentesque. Aliquam erat volutpat. Vestibulum aliquam eleifend sem eu accumsan. Quisque lacus quam, molestie eget turpis a, interdum iaculis diam.
-
-Ut nec dui malesuada, efficitur elit in, tincidunt lectus. Curabitur faucibus aliquam maximus. Morbi erat nibh, mollis a iaculis a, porttitor vitae leo. Duis tincidunt orci vel massa fringilla, posuere mollis tellus malesuada. Maecenas vel tempus elit. Pellentesque mollis ullamcorper nunc, non sodales nunc. Morbi volutpat leo id tortor scelerisque, sit amet feugiat est facilisis. Sed faucibus tincidunt orci, a fringilla ipsum eleifend ut. Morbi pulvinar molestie ligula eget imperdiet. Nullam auctor molestie dui quis convallis. Cras bibendum tellus ac risus vehicula finibus. Pellentesque id ipsum urna. Cras vitae mauris convallis, dictum ex sit amet, blandit mi. Maecenas at eros id tellus vestibulum efficitur.
-
-Suspendisse ligula orci, rutrum quis ornare sed, dignissim quis ipsum. Suspendisse nisi dolor, ultrices in dignissim a, ornare posuere arcu. Maecenas eu ipsum in velit convallis ultrices imperdiet sit amet erat. Praesent id ligula ante. Cras scelerisque diam sagittis, condimentum elit at, mattis purus. Vestibulum venenatis vestibulum mi id suscipit. Quisque vel dolor non orci finibus sagittis. Phasellus sed eros vitae nulla pellentesque porta a sed diam. Sed suscipit accumsan sapien nec mollis. Etiam tincidunt libero sem, sit amet semper dolor pulvinar vitae. Proin varius felis vitae augue blandit posuere. Curabitur a orci dignissim dui auctor fringilla. Sed sagittis dignissim mi a lobortis. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Fusce molestie, neque sollicitudin interdum ultricies, nibh tellus vestibulum urna, quis aliquam nibh quam a metus. Nulla facilisi.
-
-Aenean id semper tellus. Fusce eget tellus venenatis, aliquet orci at, convallis felis. In posuere, quam malesuada lacinia imperdiet, dui libero lobortis augue, a sagittis magna ipsum ultricies dolor. Proin non ligula dolor. Fusce vitae sagittis ex. Nulla vulputate in eros nec dictum. Pellentesque sed sodales urna. In mauris lacus, pulvinar quis orci eget, commodo mattis sem. Integer vehicula cursus dolor, a bibendum turpis suscipit et.
-  </div>  
+<div login-dialog ng-if="!isLoginPage"></div>
 </body>
 </html>
